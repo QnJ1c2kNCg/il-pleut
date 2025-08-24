@@ -170,6 +170,16 @@ pub struct TorrentFile {
     pub info_hash: [u8; 20],
 }
 
+impl TorrentFile {
+    /// Calculate the total size of all files in the torrent
+    pub fn total_size(&self) -> u64 {
+        match &self.info.files {
+            TorrentFiles::Single { length } => *length,
+            TorrentFiles::Multiple { files } => files.iter().map(|f| f.length).sum(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TorrentInfo {
     pub name: String,
@@ -191,7 +201,7 @@ pub struct TorrentFileInfo {
 }
 
 impl BencodeValue {
-    fn as_string(&self) -> Result<String, ParseError> {
+    pub(crate) fn as_string(&self) -> Result<String, ParseError> {
         match self {
             BencodeValue::String(bytes) => {
                 String::from_utf8(bytes.clone()).map_err(|_| ParseError {
@@ -204,7 +214,7 @@ impl BencodeValue {
         }
     }
 
-    fn as_bytes(&self) -> Result<&[u8], ParseError> {
+    pub(crate) fn as_bytes(&self) -> Result<&[u8], ParseError> {
         match self {
             BencodeValue::String(bytes) => Ok(bytes),
             _ => Err(ParseError {
@@ -213,7 +223,7 @@ impl BencodeValue {
         }
     }
 
-    fn as_integer(&self) -> Result<i64, ParseError> {
+    pub(crate) fn as_integer(&self) -> Result<i64, ParseError> {
         match self {
             BencodeValue::Integer(i) => Ok(*i),
             _ => Err(ParseError {
@@ -222,7 +232,7 @@ impl BencodeValue {
         }
     }
 
-    fn as_list(&self) -> Result<&[BencodeValue], ParseError> {
+    pub(crate) fn as_list(&self) -> Result<&[BencodeValue], ParseError> {
         match self {
             BencodeValue::List(list) => Ok(list),
             _ => Err(ParseError {
@@ -231,7 +241,7 @@ impl BencodeValue {
         }
     }
 
-    fn as_dict(&self) -> Result<&HashMap<Vec<u8>, BencodeValue>, ParseError> {
+    pub(crate) fn as_dict(&self) -> Result<&HashMap<Vec<u8>, BencodeValue>, ParseError> {
         match self {
             BencodeValue::Dictionary(dict) => Ok(dict),
             _ => Err(ParseError {
