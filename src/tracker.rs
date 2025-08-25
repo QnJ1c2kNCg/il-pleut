@@ -1,10 +1,7 @@
 /// Tracker client for announcing to BitTorrent trackers and parsing responses.
 use crate::parser::{BencodeParser, BencodeValue, ParseError, TorrentFile};
-use rand::Rng;
 use reqwest;
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::{IpAddr, Ipv4Addr};
 use url::Url;
 
 #[derive(Debug)]
@@ -150,12 +147,9 @@ impl TrackerClient {
         &self.peer_id
     }
 
-    pub async fn announce(
-        &self,
-        tracker_url: &str,
-        request: &TrackerRequest,
-    ) -> Result<TrackerResponse, TrackerError> {
-        let mut url = Url::parse(tracker_url)?;
+    pub async fn announce(&self, torrent: &TorrentFile) -> Result<TrackerResponse, TrackerError> {
+        let request = self.create_start_request(&torrent, 6881, 0, torrent.total_size());
+        let mut url = Url::parse(&torrent.announce)?;
 
         // Use percent-encoding for info_hash and peer_id as raw bytes
         use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
@@ -189,12 +183,6 @@ impl TrackerClient {
         // Make the request
         let response = self.client.get(url).send().await?;
         let response_bytes = response.bytes().await?;
-
-        // Debug: Print first 200 bytes of response
-        println!(
-            "Response preview: {:?}",
-            String::from_utf8_lossy(&response_bytes[..std::cmp::min(200, response_bytes.len())])
-        );
 
         // Check if response looks like HTML (starts with '<')
         if response_bytes.starts_with(b"<") {
@@ -378,7 +366,7 @@ impl TrackerClient {
     }
 
     /// Create a tracker request for starting a download
-    pub fn create_start_request(
+    fn create_start_request(
         &self,
         torrent: &TorrentFile,
         port: u16,
@@ -426,25 +414,6 @@ impl TrackerClient {
             numwant: Some(50),
             key: Some(rand::random::<u32>()),
             trackerid: tracker_id,
-        }
-    }
-
-    /// Create a minimal tracker request for testing
-    pub fn create_minimal_request(&self, torrent: &TorrentFile, port: u16) -> TrackerRequest {
-        TrackerRequest {
-            info_hash: torrent.info_hash,
-            peer_id: self.peer_id,
-            port,
-            uploaded: 0,
-            downloaded: 0,
-            left: torrent.total_size(),
-            compact: true,
-            no_peer_id: false,
-            event: None, // No event
-            ip: None,
-            numwant: None, // No numwant
-            key: None,     // No key
-            trackerid: None,
         }
     }
 }

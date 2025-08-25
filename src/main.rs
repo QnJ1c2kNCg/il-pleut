@@ -1,10 +1,15 @@
+use crate::peer_manager::PeerClient;
+use crate::wire::PeerMessage;
 use crate::{
     parser::{TorrentFiles, parse_torrent_file},
     tracker::TrackerClient,
 };
+use std::net::SocketAddr;
 
 mod parser;
+mod peer_manager;
 mod tracker;
+mod wire;
 
 #[tokio::main]
 async fn main() {
@@ -32,17 +37,9 @@ async fn main() {
 
     // Create tracker client
     let tracker_client = TrackerClient::new();
-    println!("Our peer ID: {:?}", tracker_client.get_peer_id());
-
-    // Create a start request
-    // let request = tracker_client.create_start_request(&torrent, 6881, 0, torrent.total_size());
-    let request = tracker_client.create_minimal_request(&torrent, 6881);
 
     // Announce to tracker
-    let response = tracker_client
-        .announce(&torrent.announce, &request)
-        .await
-        .unwrap();
+    let response = tracker_client.announce(&torrent).await.unwrap();
 
     println!("Tracker response:");
     println!("  Interval: {} seconds", response.interval);
@@ -56,5 +53,32 @@ async fn main() {
 
     if let Some(warning) = response.warning_message {
         println!("  Warning: {}", warning);
+    }
+
+    // Test handshake with the first peer
+    if let Some(first_peer) = response.peers.first() {
+        let addr = SocketAddr::new(first_peer.ip, first_peer.port);
+        println!("\nConnecting to first peer: {}", addr);
+        match PeerClient::connect(
+            addr,
+            torrent.info_hash,
+            tracker_client.get_peer_id().clone(),
+        ) {
+            Ok(mut peer_client) => {
+                println!("Handshake successful with peer: {:?}", peer_client.addr);
+                // Optionally, send an Interested message and receive a response
+                peer_client.send_message(&PeerMessage::Interested).unwrap();
+                match peer_client.receive_message() {
+                    Ok(msg) => println!(
+                        "Received message from peer [{:?}]: {:?}",
+                        peer_client.addr, msg
+                    ),
+                    Err(e) => println!("Error receiving message: {}", e),
+                }
+            }
+            Err(e) => {
+                println!("Failed to connect/handshake with peer: {}", e);
+            }
+        }
     }
 }
