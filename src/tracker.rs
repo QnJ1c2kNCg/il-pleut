@@ -251,11 +251,13 @@ impl TrackerClient {
             .get(b"downloaded".as_ref())
             .map(|v| v.as_integer().unwrap_or(0) as u32);
 
-        // Parse peers
+        // Parse peers - try compact first, fall back to dictionary format
         let peers = if let Some(peers_value) = response_dict.get(b"peers".as_ref()) {
-            if request.compact {
-                Self::parse_compact_peers(peers_value)?
+            // Try compact format first (binary string)
+            if let Ok(compact_peers) = Self::parse_compact_peers(peers_value) {
+                compact_peers
             } else {
+                // Fall back to dictionary format
                 Self::parse_dict_peers(peers_value)?
             }
         } else {
@@ -277,7 +279,7 @@ impl TrackerClient {
 
     fn parse_compact_peers(peers_value: &BencodeValue) -> Result<Vec<Peer>, TrackerError> {
         let peers_bytes = peers_value.as_bytes().map_err(|_| TrackerError {
-            message: "Compact peers must be bytes".to_string(),
+            message: "Not compact format - peers is not a byte string".to_string(),
         })?;
 
         if peers_bytes.len() % 6 != 0 {
@@ -324,8 +326,8 @@ impl TrackerClient {
                     })?,
             );
 
-            let ip = ip_str.parse::<IpAddr>().map_err(|_| TrackerError {
-                message: "Invalid IP address".to_string(),
+            let ip = ip_str.parse::<IpAddr>().map_err(|e| TrackerError {
+                message: format!("Invalid IP address '{}': {}", ip_str, e),
             })?;
 
             let port = peer_dict
