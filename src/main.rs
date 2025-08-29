@@ -2,6 +2,7 @@ use crate::download::Downloader;
 use crate::peer_manager::PeerClient;
 use crate::ui::{UI, UIEvent};
 use crate::{parser::parse_torrent_file, tracker::TrackerClient};
+use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,14 +16,49 @@ mod tracker;
 mod ui;
 mod wire;
 
+/// Il Pleut - A minimal BitTorrent client
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the torrent file to download
+    torrent_file: String,
+
+    /// Output directory for downloaded files
+    #[arg(short, long, default_value = ".")]
+    output: String,
+
+    /// Port to listen on for peer connections
+    #[arg(short, long, default_value = "6881")]
+    port: u16,
+}
+
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
+    // Validate torrent file exists
+    if !std::path::Path::new(&args.torrent_file).exists() {
+        eprintln!("Error: Torrent file '{}' not found", args.torrent_file);
+        std::process::exit(1);
+    }
+
+    // Validate output directory
+    if args.output != "." {
+        if let Err(e) = std::fs::create_dir_all(&args.output) {
+            eprintln!(
+                "Error: Cannot create output directory '{}': {}",
+                args.output, e
+            );
+            std::process::exit(1);
+        }
+    }
+
     // Create UI
     let mut ui = match UI::new() {
         Ok(ui) => ui,
         Err(e) => {
             eprintln!("Failed to create UI: {}", e);
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -32,11 +68,14 @@ async fn main() {
     // Start download process in background thread
     let download_sender = ui_sender.clone();
     let stop_signal = should_stop.clone();
+    let torrent_path = args.torrent_file.clone();
+    let output_dir = args.output.clone();
+    let port = args.port;
     let download_handle = thread::spawn(move || {
         tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(async move {
-                run_download(download_sender, stop_signal).await;
+                run_download(download_sender, stop_signal, torrent_path, output_dir, port).await;
             });
     });
 
@@ -60,10 +99,15 @@ async fn main() {
     println!("Shutting down...");
 }
 
-async fn run_download(ui_sender: std::sync::mpsc::Sender<UIEvent>, should_stop: Arc<AtomicBool>) {
+async fn run_download(
+    ui_sender: std::sync::mpsc::Sender<UIEvent>,
+    should_stop: Arc<AtomicBool>,
+    torrent_path: String,
+    output_dir: String,
+    port: u16,
+) {
     // Parse torrent file
-    // let torrent = match parse_torrent_file("samples/ubuntu-25.04-desktop-amd64.iso.torrent") {
-    let torrent = match parse_torrent_file("samples/archlinux-2025.01.01-x86_64.iso.torrent") {
+    let torrent = match parse_torrent_file(&torrent_path) {
         Ok(torrent) => {
             let _ = ui_sender.send(UIEvent::TorrentParsed(torrent.clone()));
             torrent
@@ -109,7 +153,11 @@ async fn run_download(ui_sender: std::sync::mpsc::Sender<UIEvent>, should_stop: 
                 let _ = ui_sender.send(UIEvent::PeerConnected(addr));
 
                 // Create downloader and start downloading
-                let output_filename = format!("{}.download", torrent.info.name);
+                let output_filename = if output_dir == "." {
+                    format!("{}.download", torrent.info.name)
+                } else {
+                    format!("{}/{}.download", output_dir, torrent.info.name)
+                };
 
                 match Downloader::new(torrent.clone(), &output_filename) {
                     Ok(downloader) => {
