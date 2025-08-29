@@ -1,3 +1,4 @@
+use crate::download::Downloader;
 use crate::peer_manager::PeerClient;
 use crate::wire::PeerMessage;
 use crate::{
@@ -6,6 +7,7 @@ use crate::{
 };
 use std::net::SocketAddr;
 
+mod download;
 mod parser;
 mod peer_manager;
 mod tracker;
@@ -55,10 +57,11 @@ async fn main() {
         println!("  Warning: {}", warning);
     }
 
-    // Test handshake with the first peer
-    if let Some(first_peer) = response.peers.first() {
-        let addr = SocketAddr::new(first_peer.ip, first_peer.port);
-        println!("\nConnecting to first peer: {}", addr);
+    // Find a suitable peer and start downloading
+    let mut connected = false;
+    for peer in &response.peers {
+        let addr = SocketAddr::new(peer.ip, peer.port);
+        println!("\nConnecting to peer: {}", addr);
         match PeerClient::connect(
             addr,
             torrent.info_hash,
@@ -66,19 +69,36 @@ async fn main() {
         ) {
             Ok(mut peer_client) => {
                 println!("Handshake successful with peer: {:?}", peer_client.addr);
-                // Optionally, send an Interested message and receive a response
-                peer_client.send_message(&PeerMessage::Interested).unwrap();
-                match peer_client.receive_message() {
-                    Ok(msg) => println!(
-                        "Received message from peer [{:?}]: {:?}",
-                        peer_client.addr, msg
-                    ),
-                    Err(e) => println!("Error receiving message: {}", e),
+
+                // Create downloader and start downloading
+                let output_filename = format!("{}.download", torrent.info.name);
+                println!("Downloading to: {}", output_filename);
+
+                match Downloader::new(torrent.clone(), &output_filename) {
+                    Ok(mut downloader) => match downloader.download(&mut peer_client) {
+                        Ok(()) => {
+                            println!("Download completed successfully!");
+                            connected = true;
+                            break;
+                        }
+                        Err(e) => {
+                            println!("Download failed: {}", e);
+                        }
+                    },
+                    Err(e) => {
+                        println!("Failed to create downloader: {}", e);
+                    }
                 }
             }
             Err(e) => {
                 println!("Failed to connect/handshake with peer: {}", e);
+                // Try next peer
+                continue;
             }
         }
+    }
+
+    if !connected {
+        println!("Failed to connect to any peers or download failed");
     }
 }

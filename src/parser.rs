@@ -162,7 +162,7 @@ impl<'a> BencodeParser<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TorrentFile {
     pub announce: String,
     pub announce_list: Option<Vec<Vec<String>>>,
@@ -180,7 +180,7 @@ impl TorrentFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TorrentInfo {
     pub name: String,
     pub piece_length: u32,
@@ -188,13 +188,13 @@ pub struct TorrentInfo {
     pub files: TorrentFiles,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TorrentFiles {
     Single { length: u64 },
     Multiple { files: Vec<TorrentFileInfo> },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TorrentFileInfo {
     pub path: Vec<String>,
     pub length: u64,
