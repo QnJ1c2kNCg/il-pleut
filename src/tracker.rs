@@ -76,14 +76,14 @@ pub struct TrackerRequest {
     pub trackerid: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Peer {
     pub ip: IpAddr,
     pub port: u16,
     pub peer_id: Option<Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrackerResponse {
     pub failure_reason: Option<String>,
     pub warning_message: Option<String>,
@@ -177,8 +177,6 @@ impl TrackerClient {
         }
 
         url.set_query(Some(&query));
-
-        println!("Announcing to tracker: {}", url);
 
         // Make the request
         let response = self.client.get(url).send().await?;

@@ -1,11 +1,14 @@
 use crate::parser::{TorrentFile, TorrentFiles};
 use crate::peer_manager::PeerClient;
+use crate::ui::UIEvent;
 use crate::wire::PeerMessage;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 
 const BLOCK_SIZE: u32 = 16384; // 16KB standard block size
 
@@ -87,6 +90,8 @@ pub struct Downloader {
     current_piece_buffer: Option<(u32, PieceBuffer)>,
     peer_bitfield: Option<Vec<u8>>,
     peer_choked: bool,
+    ui_sender: Option<Sender<UIEvent>>,
+    stop_signal: Option<Arc<AtomicBool>>,
 }
 
 impl Downloader {
@@ -112,11 +117,25 @@ impl Downloader {
             current_piece_buffer: None,
             peer_bitfield: None,
             peer_choked: true,
+            ui_sender: None,
+            stop_signal: None,
         })
     }
 
+    pub fn with_ui_sender(mut self, sender: Sender<UIEvent>) -> Self {
+        self.ui_sender = Some(sender);
+        self
+    }
+
+    pub fn with_stop_signal(mut self, stop_signal: Arc<AtomicBool>) -> Self {
+        self.stop_signal = Some(stop_signal);
+        self
+    }
+
     pub fn download(&mut self, peer: &mut PeerClient) -> Result<(), DownloadError> {
-        println!("Starting download...");
+        if let Some(ref sender) = self.ui_sender {
+            let _ = sender.send(UIEvent::DownloadStarted);
+        }
 
         // Wait for bitfield and initial messages
         self.handle_initial_messages(peer)?;
@@ -129,12 +148,16 @@ impl Downloader {
 
         // Download pieces in order
         for piece_index in 0..self.torrent.info.pieces.len() {
+            // Check if we should stop
+            if let Some(ref stop_signal) = self.stop_signal {
+                if stop_signal.load(Ordering::Relaxed) {
+                    return Err(DownloadError {
+                        message: "Download stopped by user".to_string(),
+                    });
+                }
+            }
+
             if self.can_download_piece(piece_index as u32) {
-                println!(
-                    "Downloading piece {}/{}",
-                    piece_index + 1,
-                    self.torrent.info.pieces.len()
-                );
                 self.download_piece(peer, piece_index as u32)?;
             } else {
                 return Err(DownloadError {
@@ -143,7 +166,9 @@ impl Downloader {
             }
         }
 
-        println!("Download completed successfully!");
+        if let Some(ref sender) = self.ui_sender {
+            let _ = sender.send(UIEvent::DownloadComplete);
+        }
         Ok(())
     }
 
@@ -163,27 +188,23 @@ impl Downloader {
                     messages_received += 1;
                     match msg {
                         PeerMessage::Bitfield(bits) => {
-                            println!("Received bitfield with {} bytes", bits.len());
                             self.peer_bitfield = Some(bits);
                         }
                         PeerMessage::Unchoke => {
-                            println!("Peer unchoked us");
                             self.peer_choked = false;
                             break; // Ready to start downloading
                         }
                         PeerMessage::Choke => {
-                            println!("Peer choked us");
                             self.peer_choked = true;
                         }
                         PeerMessage::Have(piece_index) => {
-                            println!("Peer has piece {}", piece_index);
                             self.update_peer_has_piece(piece_index);
                         }
                         PeerMessage::KeepAlive => {
                             // Ignore keep-alive messages
                         }
-                        other => {
-                            println!("Received unexpected message: {:?}", other);
+                        _other => {
+                            // Ignore other messages during initialization
                         }
                     }
                 }
@@ -249,6 +270,15 @@ impl Downloader {
         // Receive blocks until piece is complete
         let mut blocks_received = 0;
         while !piece_buffer.is_complete() && blocks_received < num_blocks * 2 {
+            // Check if we should stop
+            if let Some(ref stop_signal) = self.stop_signal {
+                if stop_signal.load(Ordering::Relaxed) {
+                    return Err(DownloadError {
+                        message: "Download stopped by user".to_string(),
+                    });
+                }
+            }
+
             match peer.receive_message() {
                 Ok(PeerMessage::Piece {
                     index,
@@ -276,11 +306,8 @@ impl Downloader {
                 Ok(PeerMessage::KeepAlive) => {
                     // Ignore keep-alive
                 }
-                Ok(other) => {
-                    println!(
-                        "Received unexpected message during piece download: {:?}",
-                        other
-                    );
+                Ok(_other) => {
+                    // Ignore other messages during piece download
                 }
                 Err(e) => {
                     return Err(DownloadError {
@@ -349,12 +376,11 @@ impl Downloader {
 
         let completed = self.completed_pieces.iter().filter(|&&x| x).count();
         let total = self.completed_pieces.len();
-        let percentage = (completed * 100) / total;
 
-        println!(
-            "Piece {} verified and written ({}/{}  {}%)",
-            piece_index, completed, total, percentage
-        );
+        // Send progress update to UI
+        if let Some(ref sender) = self.ui_sender {
+            let _ = sender.send(UIEvent::PieceCompleted(piece_index, completed, total));
+        }
 
         Ok(())
     }
